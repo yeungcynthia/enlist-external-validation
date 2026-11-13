@@ -1,0 +1,20 @@
+{
+  "gold": {
+    "patient_id": "study_id",
+    "systemic_anticancer_agents": "manual_regimen",
+    "start_date": "manual_start",
+    "stop_date": "manual_stop",
+    "first_pd_date": "manual_progression_date",
+    "censor_date": "manual_censor_date",
+    "pfs_censor_flag": "manual_event"
+  },
+  "predicted": {
+    "patient_id": "study_id",
+    "systemic_anticancer_agents": "extracted_regimen",
+    "start_date": "extracted_start",
+    "stop_date": "extracted_stop",
+    "first_pd_date": "extracted_progression_date",
+    "censor_date": "extracted_censor_date",
+    "pfs_censor_flag": "extracted_event"
+  }
+}

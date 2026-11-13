@@ -1,0 +1,4 @@
+patient_id,systemic_anticancer_agents,enlist_lot_label,start_date,stop_date,first_pd_date,censor_date,pfs_censor_flag
+SYN001,carboplatin+pemetrexed+pembrolizumab,1,2020-01-05,2020-04-10,2020-04-20,,1
+SYN001,docetaxel,2,2020-05-03,2020-10-10,,2020-10-05,0
+SYN002,osimertinib,1,2021-02-15,2021-12-05,,2021-12-15,0

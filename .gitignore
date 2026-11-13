@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.DS_Store
+# Local clinical inputs and row-level validation results belong outside version control.
+data/
+results/
