@@ -15,17 +15,18 @@ python -m pip install -e .
 python evaluate.py \
   --gold example_gold.csv \
   --predicted example_predicted.csv \
+  --date-mode fixed \
   --output results/example
 python -m unittest -v
 ```
 
 The output directory must be new. This protects prior results from accidental replacement.
 
-Expected example counts: 3 evaluated patients, 3 aligned pairs, 1 missed gold episode, no extra predicted episodes. Line sensitivity = 3/4, PPV = 3/3, F1 = 6/7. Start-date agreement = 2/3 under uncertainty tolerances. The example patients, dates, and regimens are synthetic.
+Expected example counts: 3 evaluated patients, 3 aligned pairs, 1 missed gold episode, no extra predicted episodes. Line sensitivity = 3/4, PPV = 3/3, F1 = 6/7. Start-date agreement = 3/3 in the fixed-mode example (2/3 with uncertainty mode). The example patients, dates, and regimens are synthetic.
 
 ## Adapt your annotations
 
-Supply one CSV row per treatment episode on each side. `patient_id` must identify the same person across files. IDs are kept as strings, including leading zeros. Restrict the gold file to patients and episodes that were fully reviewed for the evaluation scope.
+Supply one CSV row per treatment episode on each side. `patient_id` must identify the same person across files. IDs use Elena's original normalization: numeric representations and leading zeros are collapsed (for example, `00123` and `123.0` become `123`). Rows with blank patient IDs are dropped. Restrict the gold file to patients and episodes that were fully reviewed for the evaluation scope.
 
 | Column | Meaning |
 | --- | --- |
@@ -40,9 +41,9 @@ Supply one CSV row per treatment episode on each side. `patient_id` must identif
 
 `first_pd_date_U` is accepted if `pd_date_U` is blank or absent. Only gold uncertainty codes affect scoring. Use U0–U4 or leave blank. Do not invent codes for annotations that did not capture uncertainty.
 
-Only fields with a column on **both** sides are scored. Omit a column when that field was not collected. An empty cell in a present column is treated as a missing/absent value under the source comparator, including agreement when both values are absent. For dates, separate gold-date-present and both-date-present metrics reveal how much agreement depends on absent dates. If blanks mix unreviewed and confirmed absent values within a column, prepare a consistently reviewed subset before scoring.
+Every predefined key field is compared on aligned pairs, as in Elena's original evaluator, even when its column is absent from one or both files. An absent column supplies a missing value. Two missing dates, flags, or LoT labels agree; a missing value on only one side disagrees. Regimen comparison is unavailable if either normalized drug set is absent. Thus a high agreement for an uncollected field does not establish extraction performance. `run.json` lists fields with missing input columns, and the populated-date metrics help interpret missingness.
 
-A patient row with all evaluable fields blank represents zero episodes. This allows recording a completed review with no episodes. A row containing only a date is retained as an episode. Stable chronological sorting uses start date, with missing starts last and input order breaking ties. When chronology is unavailable, put rows in the intended temporal order.
+Episode identification also follows Elena's original implementation: a row is skipped when both `systemic_anticancer_agents` and `enlist_lot_label` are blank, even if it contains dates or a PFS flag. Max should map his existing episode/line label into `enlist_lot_label` when no regimen is available. A row with both fields blank can represent a reviewed patient with zero episodes. Stable chronological sorting uses parsed start date, with missing starts last and input order breaking ties.
 
 The default evaluation cohort is all patients in the gold file. Gold episodes for a patient with no prediction rows count as misses. Prediction-only patients are excluded because their manual review status is unknown, and their number is reported in `run.json`. Include a zero-episode gold row to evaluate extra predictions for a reviewed patient with no gold episodes. `--patient-scope common` restores the source's intersection-only patient scope when reproducing that behavior.
 
@@ -53,10 +54,13 @@ python evaluate.py \
   --gold /path/to/manual.csv \
   --predicted /path/to/extracted.csv \
   --mapping /path/to/mapping.json \
+  --date-mode fixed \
   --output results/stanford-validation
 ```
 
-Dates must be complete ISO calendar dates. Invalid dates, nonbinary nonblank event flags, and unknown nonblank U-codes raise errors instead of silently becoming nulls. Translate Stanford event/censor coding explicitly. `first_pd_date` means progression date: if the local PFS event definition includes death without progression, agree on how that endpoint is represented before interpreting this date metric.
+Dates and event flags use Elena's original permissive parsers. Dates accept common date formats and timestamps; values such as `ongoing`, `null`, and unparseable dates become missing. Complete ISO dates remain the clearest input format. Flags accept numeric strings (including `1.0`), `yes`/`no`, and `true`/`false`; unrecognized text becomes missing. The original numeric parser also accepts values outside 0/1, so Max should check that his coding means 1 = event and 0 = censored. The mapping renames columns and does not infer or invert status coding. `first_pd_date` means progression date: if the local PFS event definition includes death without progression, agree on how that endpoint is represented before interpreting this date metric.
+
+For annotations without uncertainty codes, use `--date-mode fixed`, as in both examples above: start/progression ±14 days and stop/censor ±30 days. The optional uncertainty mode remains the program default from the initial handoff; without U-codes it uses ±30 days for all four dates. The example commands explicitly choose fixed mode for Max.
 
 ## Alignment
 
@@ -99,11 +103,11 @@ The boundary is inclusive. The public pipeline's fixed comparator is available w
 
 - `metrics.csv`: values on a 0–1 scale, numerators, denominators, and patient-clustered 95% percentile bootstrap intervals. Event confusion entries are counts in `numerator`, with value and denominator blank.
 - `alignment.csv`: one row per correspondence, missed gold episode, or extra prediction, including source CSV row numbers, compared values, applied tolerances, and match flags. Keep this file within the local clinical environment when using real data.
-- `run.json`: cohort counts, fields scored/unavailable, configuration, column mapping, and input SHA-256 hashes.
+- `run.json`: cohort counts, fields scored and fields with missing input columns, configuration, column mapping, and input SHA-256 hashes.
 
 Line sensitivity = matched / (matched + missed), PPV = matched / (matched + extra), F1 = 2 × matched / (2 × matched + missed + extra). Empty denominators are unavailable. A one-sided nonempty timeline yields zero F1 here; the source paper helper returned unavailable when precision or sensitivity was undefined.
 
-Field metrics use aligned pairs only. Gaps affect line recovery, not field agreement. The main `*_agreement` uses the source's null semantics: absent/absent dates, flags, and labels agree; one absent value disagrees; regimen comparison is unavailable if either drug set is absent. Entirely unavailable columns produce no field metric.
+Field metrics use aligned pairs only. Gaps affect line recovery, not field agreement. The main `*_agreement` uses the source's null semantics: absent/absent dates, flags, and labels agree; one absent value disagrees; regimen comparison is unavailable if either drug set is absent. Absent columns are scored as missing values under the same rules; check the missing-column list before interpreting a field metric.
 
 Each date also has `*_acc_gold_date_present` and `*_acc_both_date_present`. These are descriptive subsets of matched pairs, not episode-recovery-inclusive measures. Five conditional PFS date metrics follow the paper's subset definitions: progression when both flags are event, censor date when both flags are censored, progression/censor when both dates are present, and progression when the gold flag is event. The last still uses aligned pairs only. The both-flag subsets retain null/null agreement, exactly as the source helper does; read them with the both-date-present metrics.
 

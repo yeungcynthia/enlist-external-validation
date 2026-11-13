@@ -5,6 +5,7 @@ See PROVENANCE.md for source revisions and extraction details.
 
 
 import re
+from datetime import datetime
 from typing import Optional, List, Tuple, Dict
 import numpy as np
 import pandas as pd
@@ -227,3 +228,53 @@ def needleman_wunsch(gs: List[Dict], llm: List[Dict],
             aln.append((None, j - 1)); j -= 1
     aln.reverse()
     return aln
+
+
+def parse_date(val) -> Optional[datetime]:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if isinstance(val, pd.Timestamp):
+        dt = val.to_pydatetime()
+        return dt.replace(tzinfo=None) if dt.tzinfo else dt
+    if isinstance(val, datetime):
+        return val.replace(tzinfo=None) if val.tzinfo else val
+    s = str(val).strip()
+    if not s or s.lower() in ("none", "null", "nat", "nan", "ongoing", ""):
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%m/%d/%y", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(s[:10], fmt) if "H" not in fmt else datetime.strptime(s[:19], fmt)
+        except (ValueError, IndexError):
+            continue
+    try:
+        parsed = pd.to_datetime(s, errors="coerce")
+        if pd.notna(parsed):
+            dt = parsed.to_pydatetime()
+            return dt.replace(tzinfo=None) if dt.tzinfo else dt
+    except Exception:
+        pass
+    return None
+
+
+def normalize_mrn(mrn) -> str:
+    if mrn is None or (isinstance(mrn, float) and pd.isna(mrn)):
+        return ""
+    s = str(mrn).strip()
+    try:
+        return str(int(float(s)))
+    except (ValueError, TypeError):
+        return s.lstrip("0") or "0"
+
+
+def norm_flag(v) -> Optional[int]:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    try:
+        return int(float(v))
+    except (ValueError, TypeError):
+        s = str(v).strip().lower()
+        if s in ("1", "true", "yes"):
+            return 1
+        if s in ("0", "false", "no"):
+            return 0
+        return None

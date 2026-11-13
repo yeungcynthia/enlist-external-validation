@@ -1,7 +1,7 @@
 """CSV adapter and metrics for the unchanged EnLiST alignment algorithm."""
 import argparse
 import csv
-from datetime import date, datetime
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -20,7 +20,7 @@ U_FIELDS = {'start': 'start_date_U', 'stop': 'stop_date_U',
 
 
 def load_csv(path, mapping=None):
-    """Read IDs as exact strings; reject malformed values rather than scoring nulls."""
+    """Adapt CSV columns using Elena's original ID, date, flag, and episode rules."""
     mapping = mapping or {}
     if len(set(mapping.values())) != len(mapping):
         raise ValueError('Column mapping must use distinct source columns')
@@ -39,23 +39,17 @@ def load_csv(path, mapping=None):
             if None in raw:
                 raise ValueError(f'CSV row {number}: too many cells')
             row = {k: (raw.get(mapping.get(k, k)) or '').strip() for k in columns}
-            if not row['patient_id']:
-                raise ValueError(f'CSV row {number}: blank patient_id')
-            episode = {'patient_id': row['patient_id'], 'source_row': number}
+            patient_id = nw.normalize_mrn(row['patient_id'] or None)
+            if not patient_id:
+                continue
+            episode = {'patient_id': patient_id, 'source_row': number}
             for column, field in FIELDS.items():
-                value = row.get(column, '')
-                if column in DATES and value:
-                    try:
-                        if date.fromisoformat(value).isoformat() != value:
-                            raise ValueError()
-                        value = datetime.strptime(value, '%Y-%m-%d')
-                    except ValueError:
-                        raise ValueError(f'CSV row {number}: {column} must be YYYY-MM-DD') from None
-                elif column == 'pfs_censor_flag' and value:
-                    if value not in ('0', '1'):
-                        raise ValueError(f'CSV row {number}: pfs_censor_flag must be 0 or 1')
-                    value = int(value)
-                episode[field] = value if value != '' else None
+                value = row.get(column) or None
+                if column in DATES:
+                    value = nw.parse_date(value)
+                elif column == 'pfs_censor_flag':
+                    value = nw.norm_flag(value)
+                episode[field] = value
             for field, column in U_FIELDS.items():
                 value = row.get(column, '')
                 if field == 'first_pd' and not value:
@@ -64,8 +58,11 @@ def load_csv(path, mapping=None):
                     raise ValueError(f'CSV row {number}: unknown uncertainty code for {field}')
                 episode[field + '_U'] = value.upper() or None
             episode['drugs'] = nw.regimen_to_drug_set(episode['regimen'])
-            # Unlike the original placeholder rule, date-only Stanford episodes are retained.
-            episode['placeholder'] = all(episode[k] is None for k in FIELDS.values())
+            # Source extract_lines skips rows with neither a regimen nor a LoT label.
+            def _blank(v):
+                return v is None or str(v).strip() == ''
+            episode['placeholder'] = (_blank(episode['regimen']) and
+                                      _blank(episode['lot_label']))
             rows.append(episode)
     return rows, columns
 
@@ -135,7 +132,7 @@ def metric_counts(rows, fields):
         for name, g, p in [('event_true_positive', 1, 1), ('event_false_negative', 1, 0),
                            ('event_false_positive', 0, 1), ('event_true_negative', 0, 0)]:
             stats[name] = (sum(r['gold_pfs_flag'] == g and r['predicted_pfs_flag'] == p for r in matched), None, None)
-        known = [r for r in matched if r['gold_pfs_flag'] is not None and r['predicted_pfs_flag'] is not None]
+        known = [r for r in matched if r['gold_pfs_flag'] in (0, 1) and r['predicted_pfs_flag'] in (0, 1)]
         add('pfs_flag_agreement_both_known', sum(r['gold_pfs_flag'] == r['predicted_pfs_flag'] for r in known), len(known))
         for name, field, flag in [('first_pd_acc_both_event_flag', 'first_pd', 1),
                                   ('censor_date_acc_both_censor_flag', 'censor_date', 0),
@@ -194,13 +191,12 @@ def main():
     mapping = json.loads(args.mapping.read_text()) if args.mapping else {}
     gold, gc = load_csv(args.gold, mapping.get('gold'))
     predicted, pc = load_csv(args.predicted, mapping.get('predicted'))
-    fields = [f for c, f in FIELDS.items() if c in gc and c in pc]
-    if not fields:
-        parser.error('No shared evaluable fields')
+    # Source stage4 evaluates every predefined field, including absent columns.
+    fields = list(FIELDS.values())
     detail, patients, audit = align(gold, predicted, fields, args.date_mode, args.patient_scope)
     summary = summarize(detail, patients, fields, args.bootstrap, args.seed)
     audit.update({'date_mode': args.date_mode, 'fields_scored': fields,
-                  'fields_unavailable': [f for f in FIELDS.values() if f not in fields],
+                  'fields_missing_input_columns': [f for c, f in FIELDS.items() if c not in gc or c not in pc],
                   'n_matched': sum(r['alignment_type'] == 'matched' for r in detail),
                   'n_gold_missed': sum(r['alignment_type'] == 'gs_missed' for r in detail),
                   'n_prediction_extra': sum(r['alignment_type'] == 'agent_extra' for r in detail),

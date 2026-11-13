@@ -14,7 +14,7 @@ class ValidationTests(unittest.TestCase):
     def fixture(self):
         gold, gc = load_csv(ROOT / 'example_gold.csv')
         pred, pc = load_csv(ROOT / 'example_predicted.csv')
-        fields = [f for c, f in FIELDS.items() if c in gc and c in pc]
+        fields = list(FIELDS.values())
         return gold, pred, fields
 
     def test_example_counts_and_uncertainty(self):
@@ -91,34 +91,56 @@ class ValidationTests(unittest.TestCase):
         path.write_text(text)
         return path
 
-    def test_date_only_rows_ids_mapping_and_unavailable_fields(self):
+    def test_original_id_normalization_and_episode_filter(self):
         path = self.csv_file('sid,begin\n001,2020-01-01\n')
         rows, columns = load_csv(path, {'patient_id': 'sid', 'start_date': 'begin'})
-        self.assertEqual(rows[0]['patient_id'], '001')
-        self.assertFalse(rows[0]['placeholder'])
+        self.assertEqual(rows[0]['patient_id'], '1')
+        self.assertTrue(rows[0]['placeholder'])
         self.assertNotIn('pfs_censor_flag', columns)
-        detail, _, _ = align(rows, rows, ['start'])
-        self.assertEqual(metric_counts(detail, ['start'])['start_agreement'][2], 1)
+        detail, _, _ = align(rows, rows, list(FIELDS.values()))
+        self.assertEqual(detail, [])
 
     def test_reviewed_zero_episode_patient_counts_extra_predictions(self):
-        g = self.csv_file('patient_id,start_date\nSYN001,\n')
-        p = self.csv_file('patient_id,start_date\nSYN001,2020-01-01\nSYN999,2021-01-01\n')
-        rows, _, audit = align(load_csv(g)[0], load_csv(p)[0], ['start'])
+        g = self.csv_file('patient_id,enlist_lot_label,start_date\nSYN001,,\n')
+        p = self.csv_file('patient_id,enlist_lot_label,start_date\nSYN001,1,2020-01-01\nSYN999,1,2021-01-01\n')
+        rows, _, audit = align(load_csv(g)[0], load_csv(p)[0], list(FIELDS.values()))
         self.assertEqual([r['alignment_type'] for r in rows], ['agent_extra'])
         self.assertEqual(audit['n_prediction_only_patients_excluded'], 1)
         self.assertEqual(metric_counts(rows, ['start'])['line_f1'][2], 0)
 
-    def test_invalid_values_fail_loudly(self):
-        for text in ['patient_id,start_date\nSYN001,2020-02-30\n',
-                     'patient_id,pfs_censor_flag\nSYN001,2\n',
-                     'patient_id,start_date_U\nSYN001,U9\n',
-                     'patient_id,start_date\n,2020-01-01\n',
-                     'patient_id,start_date,start_date\nSYN001,,\n']:
-            with self.subTest(text=text), self.assertRaises(ValueError):
-                load_csv(self.csv_file(text))
+    def test_original_permissive_dates_and_flags(self):
+        path = self.csv_file('patient_id,enlist_lot_label,start_date,stop_date,pfs_censor_flag\n001,1,01/02/2020,ongoing,yes\n001,2,not-a-date,,1.0\n001,3,2020-02-30,,unavailable\n001,4,,,2\n')
+        rows, _ = load_csv(path)
+        self.assertEqual(rows[0]['start'], datetime(2020, 1, 2))
+        self.assertIsNone(rows[0]['stop'])
+        self.assertEqual(rows[0]['pfs_flag'], 1)
+        self.assertIsNone(rows[1]['start'])
+        self.assertEqual(rows[1]['pfs_flag'], 1)
+        self.assertIsNone(rows[2]['start'])
+        self.assertIsNone(rows[2]['pfs_flag'])
+        self.assertEqual(rows[3]['pfs_flag'], 2)
+
+    def test_absent_columns_are_compared_as_missing(self):
+        path = self.csv_file('patient_id,enlist_lot_label\n001,1\n')
+        rows, _ = load_csv(path)
+        detail, _, _ = align(rows, rows, list(FIELDS.values()))
+        stats = metric_counts(detail, list(FIELDS.values()))
+        self.assertEqual(stats['start_agreement'], (1, 1, 1))
+        self.assertEqual(stats['pfs_flag_agreement'], (1, 1, 1))
+        self.assertEqual(stats['regimen_agreement'], (0, 0, None))
+
+    def test_blank_ids_are_dropped(self):
+        path = self.csv_file('patient_id,enlist_lot_label\n,1\n001,1\n')
+        rows, _ = load_csv(path)
+        self.assertEqual([r['patient_id'] for r in rows], ['1'])
+
+    def test_malformed_csv_structure_is_rejected(self):
+        path = self.csv_file('patient_id,start_date,start_date\nSYN001,,\n')
+        with self.assertRaises(ValueError):
+            load_csv(path)
 
     def test_gold_date_present_excludes_null_agreement(self):
-        path = self.csv_file('patient_id,start_date,first_pd_date\nSYN001,2020-01-01,\n')
+        path = self.csv_file('patient_id,enlist_lot_label,start_date,first_pd_date\nSYN001,1,2020-01-01,\n')
         rows = load_csv(path)[0]
         detail, _, _ = align(rows, rows, ['start', 'first_pd'])
         stats = metric_counts(detail, ['start', 'first_pd'])
