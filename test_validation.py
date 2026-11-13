@@ -19,7 +19,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_example_counts_and_uncertainty(self):
         g, p, fs = self.fixture()
-        rows, patients, audit = align(g, p, fs)
+        rows, patients, audit = align(g, p, fs, mode='uncertainty')
         stats = metric_counts(rows, fs)
         self.assertEqual(len(patients), 3)
         self.assertEqual(stats['line_sensitivity'], (3, 4, 0.75))
@@ -31,10 +31,29 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(stats['event_false_negative'][0], 1)
         self.assertEqual(audit['n_gold_patients_without_prediction_rows'], 1)
 
-    def test_fixed_mode_is_distinct(self):
+    def test_event_status_metrics_and_undefined_denominators(self):
+        gold, pred, fields = self.fixture()
+        detail, _, _ = align(gold, pred, fields)
+        stats = metric_counts(detail, fields)
+        self.assertEqual(stats['event_sensitivity'], (1, 2, 0.5))
+        self.assertEqual(stats['event_specificity'], (1, 1, 1))
+        self.assertEqual(stats['event_ppv'], (1, 1, 1))
+        self.assertEqual(stats['event_npv'], (1, 2, 0.5))
+        self.assertAlmostEqual(stats['event_f1'][2], 2 / 3)
+        self.assertEqual(stats['event_status_pairs_excluded_unknown_or_nonbinary'][0], 0)
+        empty = metric_counts([], fields)
+        for name in ['event_sensitivity', 'event_specificity', 'event_ppv', 'event_npv', 'event_f1']:
+            self.assertIsNone(empty[name][2])
+        unknown = dict(detail[0], gold_pfs_flag=None, predicted_pfs_flag=1)
+        stats = metric_counts([unknown], fields)
+        self.assertEqual(stats['event_status_pairs_excluded_unknown_or_nonbinary'][0], 1)
+        self.assertIsNone(stats['event_sensitivity'][2])
+
+    def test_fixed_mode_is_default(self):
         g, p, fs = self.fixture()
-        rows, _, _ = align(g, p, fs, mode='fixed')
+        rows, _, _ = align(g, p, fs)
         self.assertEqual(metric_counts(rows, fs)['start_agreement'][2], 1)
+        self.assertEqual([r['tolerance_start'] for r in rows if r['alignment_type'] == 'matched'], [14, 14, 14])
 
     def test_uncertainty_boundaries_and_fallback(self):
         dt = datetime(2020, 1, 1)

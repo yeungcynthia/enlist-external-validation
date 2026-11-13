@@ -2,7 +2,7 @@
 
 Align manually annotated and extracted treatment episodes, then benchmark LoT start/stop dates, PFS event/censor status, progression dates, and censor dates. This is a small, local Python package for collaborators adapting the [EnLiST pipeline](https://github.com/elenahuseni/EnLiST_LoT_PFS_Pipeline). No Foundry or model API access is required.
 
-Default date scoring uses **the gold annotation's uncertainty code**, with a 30-day fallback. The alignment algorithm and regimen normalization are unchanged from the source implementation. See [PROVENANCE.md](PROVENANCE.md) for the distinction between the public pipeline and paper evaluation code.
+Default date scoring uses **fixed tolerances: ±14 days for start/progression and ±30 days for stop/censor dates**, matching Elena's public pipeline. No uncertainty annotations or date-mode flag are required. The alignment algorithm and regimen normalization are unchanged from the source implementation. See [PROVENANCE.md](PROVENANCE.md) for the distinction between the public pipeline and paper evaluation code.
 
 ## Run the synthetic example
 
@@ -15,7 +15,6 @@ python -m pip install -e .
 python evaluate.py \
   --gold example_gold.csv \
   --predicted example_predicted.csv \
-  --date-mode fixed \
   --output results/example
 python -m unittest -v
 ```
@@ -39,7 +38,7 @@ Supply one CSV row per treatment episode on each side. `patient_id` must identif
 | `censor_date` | Censor date, `YYYY-MM-DD` |
 | `start_date_U`, `stop_date_U`, `pd_date_U`, `censor_date_U` | Optional gold uncertainty code for the corresponding date |
 
-`first_pd_date_U` is accepted if `pd_date_U` is blank or absent. Only gold uncertainty codes affect scoring. Use U0–U4 or leave blank. Do not invent codes for annotations that did not capture uncertainty.
+`first_pd_date_U` is accepted if `pd_date_U` is blank or absent. Uncertainty codes affect scoring only when `--date-mode uncertainty` is selected; fixed mode ignores them. Use U0–U4 or leave blank. Do not invent codes for annotations that did not capture uncertainty.
 
 Every predefined key field is compared on aligned pairs, as in Elena's original evaluator, even when its column is absent from one or both files. An absent column supplies a missing value. Two missing dates, flags, or LoT labels agree; a missing value on only one side disagrees. Regimen comparison is unavailable if either normalized drug set is absent. Thus a high agreement for an uncollected field does not establish extraction performance. `run.json` lists fields with missing input columns, and the populated-date metrics help interpret missingness.
 
@@ -54,13 +53,12 @@ python evaluate.py \
   --gold /path/to/manual.csv \
   --predicted /path/to/extracted.csv \
   --mapping /path/to/mapping.json \
-  --date-mode fixed \
   --output results/stanford-validation
 ```
 
 Dates and event flags use Elena's original permissive parsers. Dates accept common date formats and timestamps; values such as `ongoing`, `null`, and unparseable dates become missing. Complete ISO dates remain the clearest input format. Flags accept numeric strings (including `1.0`), `yes`/`no`, and `true`/`false`; unrecognized text becomes missing. The original numeric parser also accepts values outside 0/1, so Max should check that his coding means 1 = event and 0 = censored. The mapping renames columns and does not infer or invert status coding. `first_pd_date` means progression date: if the local PFS event definition includes death without progression, agree on how that endpoint is represented before interpreting this date metric.
 
-For annotations without uncertainty codes, use `--date-mode fixed`, as in both examples above: start/progression ±14 days and stop/censor ±30 days. The optional uncertainty mode remains the program default from the initial handoff; without U-codes it uses ±30 days for all four dates. The example commands explicitly choose fixed mode for Max.
+Fixed date tolerances are the default for both the command line and Python `align()` interface: start/progression ±14 days and stop/censor ±30 days. The example commands need no date-mode flag. Use `--date-mode uncertainty` only to opt into gold uncertainty-based scoring.
 
 ## Alignment
 
@@ -86,7 +84,7 @@ Regimens are expanded and normalized using the original dictionaries, with leuco
 
 ## Date tolerances
 
-The default `--date-mode uncertainty` uses each **gold date's** code:
+The default is fixed: start/progression ±14 days and stop/censor ±30 days. The optional `--date-mode uncertainty` uses each **gold date's** code:
 
 | Gold code | Allowed absolute difference, days |
 | --- | ---: |
@@ -97,7 +95,7 @@ The default `--date-mode uncertainty` uses each **gold date's** code:
 | U4 | 183 |
 | Blank or absent | 30 |
 
-The boundary is inclusive. The public pipeline's fixed comparator is available with `--date-mode fixed`: start/progression ±14 days, stop/censor ±30 days. Always report which mode was used. Date proximity windows used for alignment are separate from these field agreement tolerances.
+All boundaries are inclusive. `--date-mode fixed` can explicitly select the default; no flag is needed for Max's annotations. Always report which mode was used. Date proximity windows used for alignment are separate from these field agreement tolerances.
 
 ## Outputs and denominators
 
@@ -112,6 +110,10 @@ Field metrics use aligned pairs only. Gaps affect line recovery, not field agree
 Each date also has `*_acc_gold_date_present` and `*_acc_both_date_present`. These are descriptive subsets of matched pairs, not episode-recovery-inclusive measures. Five conditional PFS date metrics follow the paper's subset definitions: progression when both flags are event, censor date when both flags are censored, progression/censor when both dates are present, and progression when the gold flag is event. The last still uses aligned pairs only. The both-flag subsets retain null/null agreement, exactly as the source helper does; read them with the both-date-present metrics.
 
 Event confusion counts use known binary flags on aligned pairs. `pfs_flag_agreement_both_known` excludes unknown flags, while `pfs_flag_agreement` retains the source's null semantics. False negative means gold event/predicted censored; false positive means gold censored/predicted event. These counts are distinct from missed or extra episodes.
+
+Event-status sensitivity, specificity, PPV, NPV, and F1 use only aligned pairs with binary flags on both sides, with event = positive. Their formulas are TP/(TP+FN), TN/(TN+FP), TP/(TP+FP), TN/(TN+FN), and 2TP/(2TP+FP+FN), respectively. Unknown/nonbinary pairs are excluded and their count is reported separately. These status metrics are conditional on episode alignment; missed and extra episodes are measured by episode recovery. Episode specificity is not defined because no true-negative episode universe is specified. Status rates receive the same patient-clustered bootstrap intervals as other rates.
+
+For the collaborator handoff, return `metrics.csv` and `run.json`, plus a short description of the manual annotation definitions and fields actually collected. These outputs contain aggregate metrics/configuration rather than patient IDs, individual dates, or regimens. Keep `alignment.csv` and input CSVs in the local clinical environment. Report episode sensitivity/PPV/F1; event-status sensitivity/specificity/PPV/NPV/F1 and confusion counts; start/stop/progression/censor date agreement with denominators and confidence intervals; evaluated patient count; and the missing-input-column list. Agreement for an uncollected field should not be interpreted as performance. The default date mode is fixed and requires no uncertainty annotations.
 
 Bootstrap defaults: 2,000 samples, seed 20260904, sampling patients with replacement and retaining all episodes per sampled patient. The wrapper samples the configured cohort, including patients with zero alignment rows. Replicates with undefined denominators are excluded separately for each metric; `n_valid_bootstrap` reports the surviving count. Use `--bootstrap 0` for point estimates only. No confidence intervals are computed for raw confusion counts. Run each manual reviewer separately; there is no implicit pooling or reviewer averaging.
 

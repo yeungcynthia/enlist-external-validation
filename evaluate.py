@@ -80,7 +80,7 @@ def compare(field, gold, pred, mode):
     return a == b, None
 
 
-def align(gold, predicted, fields, mode='uncertainty', scope='gold'):
+def align(gold, predicted, fields, mode='fixed', scope='gold'):
     gold_ids = {r['patient_id'] for r in gold}
     pred_ids = {r['patient_id'] for r in predicted}
     cohort = gold_ids if scope == 'gold' else gold_ids & pred_ids
@@ -134,6 +134,16 @@ def metric_counts(rows, fields):
             stats[name] = (sum(r['gold_pfs_flag'] == g and r['predicted_pfs_flag'] == p for r in matched), None, None)
         known = [r for r in matched if r['gold_pfs_flag'] in (0, 1) and r['predicted_pfs_flag'] in (0, 1)]
         add('pfs_flag_agreement_both_known', sum(r['gold_pfs_flag'] == r['predicted_pfs_flag'] for r in known), len(known))
+        tp = stats['event_true_positive'][0]
+        fn = stats['event_false_negative'][0]
+        fp = stats['event_false_positive'][0]
+        tn = stats['event_true_negative'][0]
+        add('event_sensitivity', tp, tp + fn)
+        add('event_specificity', tn, tn + fp)
+        add('event_ppv', tp, tp + fp)
+        add('event_npv', tn, tn + fn)
+        add('event_f1', 2 * tp, 2 * tp + fp + fn)
+        stats['event_status_pairs_excluded_unknown_or_nonbinary'] = (len(matched) - len(known), None, None)
         for name, field, flag in [('first_pd_acc_both_event_flag', 'first_pd', 1),
                                   ('censor_date_acc_both_censor_flag', 'censor_date', 0),
                                   ('first_pd_acc_gold_event', 'first_pd', 1)]:
@@ -181,7 +191,7 @@ def main():
     parser.add_argument('--predicted', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True, help='New directory, must not exist')
     parser.add_argument('--mapping', type=Path, help='JSON with gold and predicted canonical-to-source maps')
-    parser.add_argument('--date-mode', choices=['uncertainty', 'fixed'], default='uncertainty')
+    parser.add_argument('--date-mode', choices=['uncertainty', 'fixed'], default='fixed')
     parser.add_argument('--patient-scope', choices=['gold', 'common'], default='gold')
     parser.add_argument('--bootstrap', type=int, default=2000)
     parser.add_argument('--seed', type=int, default=20260904)
